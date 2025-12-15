@@ -1,13 +1,13 @@
 package com.bootcamp67.ms_config_server;
 
-import org.junit.jupiter.api.Test;
+import org.junit.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 
 @SpringBootTest
-class MsConfigServerApplicationTests {
+public class MsConfigServerApplicationTests {
 
 	@Test
-	void contextLoads() {
+  public void contextLoads() {
 	}
 
 }
