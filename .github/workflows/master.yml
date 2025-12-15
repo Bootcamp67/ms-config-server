@@ -1,0 +1,135 @@
+name: Config Server CI/CD
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+env:
+  SERVICE_NAME: config-server
+  ACR_NAME: acrbootcamp67
+  IMAGE_TAG: ${{ github.sha }}
+
+jobs:
+  build:
+    name: Build and Test
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+    
+    - name: Set up JDK 11
+      uses: actions/setup-java@v3
+      with:
+        java-version: '11'
+        distribution: 'temurin'
+        cache: maven
+    
+    - name: Build with Maven
+      run: mvn clean package -DskipTests
+    
+    - name: Run Tests
+      run: mvn test
+      continue-on-error: true
+    
+    - name: Upload JAR artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: app-jar
+        path: target/*.jar
+        retention-days: 1
+
+  docker:
+    name: Build and Push Docker Image
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+    
+    - name: Download JAR artifact
+      uses: actions/download-artifact@v3
+      with:
+        name: app-jar
+        path: target/
+    
+    - name: Azure Login
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+    
+    - name: Login to ACR
+      run: |
+        az acr login --name ${{ env.ACR_NAME }}
+    
+    - name: Build Docker Image
+      run: |
+        docker build -t ${{ env.ACR_NAME }}.azurecr.io/${{ env.SERVICE_NAME }}:${{ env.IMAGE_TAG }} .
+        docker tag ${{ env.ACR_NAME }}.azurecr.io/${{ env.SERVICE_NAME }}:${{ env.IMAGE_TAG }} \
+                   ${{ env.ACR_NAME }}.azurecr.io/${{ env.SERVICE_NAME }}:latest
+    
+    - name: Push Docker Image
+      run: |
+        docker push ${{ env.ACR_NAME }}.azurecr.io/${{ env.SERVICE_NAME }}:${{ env.IMAGE_TAG }}
+        docker push ${{ env.ACR_NAME }}.azurecr.io/${{ env.SERVICE_NAME }}:latest
+    
+    - name: Logout from Azure
+      run: az logout
+
+  deploy:
+    name: Deploy to AKS
+    needs: docker
+    runs-on: ubuntu-latest
+    environment: production
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+    
+    - name: Azure Login
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+    
+    - name: Set AKS Context
+      run: |
+        az aks get-credentials \
+          --resource-group ${{ secrets.AKS_RESOURCE_GROUP }} \
+          --name ${{ secrets.AKS_CLUSTER }} \
+          --overwrite-existing
+    
+    - name: Deploy to Kubernetes
+      run: |
+        kubectl apply -f k8s/deployment.yml
+        
+        # Actualizar la imagen del deployment
+        kubectl set image deployment/${{ env.SERVICE_NAME }} \
+          ${{ env.SERVICE_NAME }}=${{ env.ACR_NAME }}.azurecr.io/${{ env.SERVICE_NAME }}:${{ env.IMAGE_TAG }} \
+          -n ${{ secrets.K8S_NAMESPACE }}
+        
+        # Esperar el rollout
+        kubectl rollout status deployment/${{ env.SERVICE_NAME }} \
+          -n ${{ secrets.K8S_NAMESPACE }} \
+          --timeout=5m
+    
+    - name: Verify Deployment
+      run: |
+        echo "=== Pods ==="
+        kubectl get pods -n ${{ secrets.K8S_NAMESPACE }} -l app=${{ env.SERVICE_NAME }}
+        
+        echo "=== Services ==="
+        kubectl get svc -n ${{ secrets.K8S_NAMESPACE }} -l app=${{ env.SERVICE_NAME }}
+        
+        echo "=== Deployment Details ==="
+        kubectl describe deployment/${{ env.SERVICE_NAME }} -n ${{ secrets.K8S_NAMESPACE }}
+    
+    - name: Get Logs
+      if: failure()
+      run: |
+        echo "=== Pod Logs ==="
+        kubectl logs -l app=${{ env.SERVICE_NAME }} -n ${{ secrets.K8S_NAMESPACE }} --tail=100
