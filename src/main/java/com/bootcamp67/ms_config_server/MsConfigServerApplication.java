@@ -1,4 +1,4 @@
-package bootcamp67.com.ms_config_server;
+package com.bootcamp67.ms_config_server;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
