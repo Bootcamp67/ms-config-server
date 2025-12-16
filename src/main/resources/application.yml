@@ -14,6 +14,10 @@ spring:
           timeout: 5
         native:
           search-locations: classpath:/configs/
+      import-check:
+        enabled: false
+    kubernetes:
+      enabled: false
   profiles:
     active: native
 
